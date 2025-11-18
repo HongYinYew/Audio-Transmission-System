@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Listen in Your Language</title>
+  <link rel="shortcut icon" type="image/x-icon" href="logo.ico" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --bg-color: #121212;
+      --card-bg: #1e1e1e;
+      --text-color: #e5e5e5;
+      --primary: #3399ff;
+      --primary-hover: #62b2ff;
+      --border-color: #333;
+      --shadow: rgba(255, 255, 255, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      box-shadow: 0 8px 25px var(--shadow);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      width: 90%;
+      max-width: 380px;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    h2 {
+      margin-top: 0;
+      margin-bottom: 1.5rem;
+      font-size: 1.6rem;
+      letter-spacing: -0.02em;
+      color: var(--primary);
+    }
+
+    button, select {
+      display: block;
+      width: 100%;
+      margin-bottom: 0.75rem;
+      padding: 0.75rem;
+      font-size: 1rem;
+      border-radius: 8px;
+      border: none;
+      transition: background-color 0.2s, transform 0.1s;
+      cursor: pointer;
+    }
+
+    button {
+      background-color: var(--primary);
+      color: white;
+      font-weight: 600;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: var(--primary-hover);
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      background-color: #555;
+      cursor: not-allowed;
+    }
+
+    select {
+      border: 1px solid var(--border-color);
+      background-color: transparent;
+      color: var(--text-color);
+      font-size: 1rem;
+      padding: 0.75rem;
+      appearance: none;
+      cursor: pointer;
+      transition: border-color 0.2s, background-color 0.2s;
+    }
+
+    select:focus {
+      border-color: var(--primary);
+      outline: none;
+      background-color: rgba(0, 123, 255, 0.05);
+    }
+
+    audio {
+      margin-top: 1.25rem;
+      width: 100%;
+      border-radius: 8px;
+      outline: none;
+    }
+
+    #status {
+      margin-top: 1rem;
+      font-size: 0.95rem;
+      opacity: 0.9;
+      min-height: 1.2em;
+    }
+
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      opacity: 0.7;
+    }
+
+    @media (max-width: 480px) {
+      .card {
+        padding: 1.5rem;
+        border-radius: 12px;
+      }
+
+      button, select {
+        font-size: 0.95rem;
+        padding: 0.65rem 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Listen in Your Language</h2>
+    <button id="refresh">Show Available Channels</button>
+    <select id="channels"></select>
+    <button id="join">Join Channel</button>
+    <button id="leave" disabled>Leave</button>
+    <div id="status"></div>
+    <audio id="audio" controls autoplay></audio>
+    <footer>9MCLC Tech Ministry • Live Listening</footer>
+  </div>
+
+  <script src="/static/client.js"></script>
+</body>
+</html>
