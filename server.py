@@ -84,10 +84,49 @@ async def transmitter_websocket(websocket: WebSocket):
 
         asyncio.create_task(send_client_count())
 
+        def _has_webm_tracks(buf: bytes) -> bool:
+            # WebM 'Tracks' element ID is 0x1654AE6B. Look for that byte sequence.
+            try:
+                return b"\x16\x54\xAE\x6B" in buf
+            except Exception:
+                return False
+
+        async def _finalize_init_after_delay(lang_key, max_delay=0.7, poll_interval=0.05):
+            # Collect initial chunks and finalize when we detect the WebM Tracks element
+            # or when max_delay is reached. Polls the init_buffer periodically.
+            waited = 0.0
+            while waited < max_delay:
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
+                ch = channels.get(lang_key)
+                if not ch:
+                    return
+                buf = ch.get("init_buffer")
+                if buf and _has_webm_tracks(buf):
+                    # Found Tracks element — finalize init
+                    ch.pop("init_buffer", None)
+                    ch["init"] = buf
+                    return
+            # Timeout reached — finalize whatever we have
+            ch = channels.get(lang_key)
+            if not ch:
+                return
+            buf = ch.pop("init_buffer", None)
+            if buf:
+                ch["init"] = buf
+
         while True:
             data = await websocket.receive_bytes()
-            if channels.get(lang) and channels[lang]["init"] is None:
-                channels[lang]["init"] = data
+            # Collect an initial buffer over a short window to form a more complete init segment
+            if channels.get(lang) and channels[lang].get("init") is None:
+                # append to init_buffer
+                buf = channels[lang].get("init_buffer")
+                if buf is None:
+                    channels[lang]["init_buffer"] = data
+                    # schedule finalization after a short delay
+                    asyncio.create_task(_finalize_init_after_delay(lang, 0.3))
+                else:
+                    channels[lang]["init_buffer"] = buf + data
             clients = channels[lang]["clients"]
             for client in list(clients):
                 try:

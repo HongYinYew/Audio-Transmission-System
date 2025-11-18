@@ -10,6 +10,8 @@ let mediaSource;
 let sourceBuffer;
 let queue = [];      // queued audio chunks
 let ready = false;
+let mediaSourceURL = null;
+const DEBUG = false;
 
 refreshBtn.addEventListener('click', async () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -17,6 +19,7 @@ refreshBtn.addEventListener('click', async () => {
         ws.binaryType = 'arraybuffer';
         ws.onopen = () => {
             statusDiv.textContent = 'Connected to Server';
+            if (DEBUG) console.log('[client] WebSocket open to server');
             // Request channel list only after connection is open
             try { ws.send('list_channels'); } catch {}
         };
@@ -43,6 +46,7 @@ refreshBtn.addEventListener('click', async () => {
                     } else if (ArrayBuffer.isView(event.data)) {
                         arrayBuffer = event.data.buffer;
                     }
+                    if (DEBUG && arrayBuffer) console.log('[client] received binary chunk, bytes=', arrayBuffer.byteLength, 'queue=', queue.length);
                     if (arrayBuffer) {
                         queue.push(arrayBuffer);
                         processQueue();
@@ -56,9 +60,9 @@ refreshBtn.addEventListener('click', async () => {
             statusDiv.textContent = 'Disconnected';
             joinBtn.disabled = false;
             leaveBtn.disabled = true;
-            if (mediaSource && mediaSource.readyState === 'open') {
-                mediaSource.endOfStream();
-            }
+            // Ensure media resources are cleaned up so queued chunks
+            // don't try to append to a removed SourceBuffer.
+            cleanupMedia();
         };
     }
 });
@@ -101,23 +105,105 @@ function initMediaSource() {
         }
 
         mediaSource = new MediaSource();
-        audioElement.src = URL.createObjectURL(mediaSource);
-        mediaSource.addEventListener('sourceopen', () => {
-            sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+        // create and keep the object URL so we can revoke it on cleanup
+        if (mediaSourceURL) {
+            try { URL.revokeObjectURL(mediaSourceURL); } catch {}
+            mediaSourceURL = null;
+        }
+        mediaSourceURL = URL.createObjectURL(mediaSource);
+        // Mute the audio element initially so Chrome will allow autoplay.
+        // User can click the audio element to unmute (we add a handler below).
+        try { audioElement.muted = false; } catch (e) {}
+        audioElement.src = mediaSourceURL;
+
+        // Allow user to unmute by clicking the audio control
+        audioElement.addEventListener('click', () => {
+            if (audioElement.muted) {
+                audioElement.muted = false;
+                audioElement.play().catch(() => {});
+                statusDiv.textContent = 'Unmuted';
+            }
+        }, { once: false });
+
+        mediaSource.addEventListener('sourceopen', (e) => {
+            const ms = e.target || mediaSource;
+            if (DEBUG) console.log('[client] mediaSource sourceopen, readyState=', ms.readyState);
+            // Ensure the MediaSource is actually open before adding buffer
+            if (ms.readyState !== 'open') {
+                // Try again shortly if this unexpectedly happens
+                setTimeout(() => { return initMediaSource().then(resolve); }, 100);
+                return;
+            }
+
+            try {
+                sourceBuffer = ms.addSourceBuffer(mimeType);
+            } catch (err) {
+                // Some browsers may have race conditions where addSourceBuffer
+                // is attempted while the MediaSource isn't yet fully ready.
+                console.warn('addSourceBuffer failed, retrying:', err);
+                setTimeout(() => {
+                    try {
+                        sourceBuffer = ms.addSourceBuffer(mimeType);
+                    } catch (err2) {
+                        console.error('addSourceBuffer retry failed:', err2);
+                        return resolve();
+                    }
+                    sourceBuffer.mode = 'sequence';
+                    sourceBuffer.addEventListener('updateend', processQueue);
+                    setTimeout(() => { ready = true; processQueue(); }, 200);
+                    resolve();
+                }, 150);
+                return;
+            }
+
             sourceBuffer.mode = 'sequence';
             sourceBuffer.addEventListener('updateend', processQueue);
             // delay start ~2 s to buffer a few chunks
-            setTimeout(() => { ready = true; processQueue(); }, 200);
+            setTimeout(() => {
+                ready = true;
+                if (DEBUG) console.log('[client] ready true; starting processQueue; queue=', queue.length);
+                processQueue();
+                // Try to play the audio element proactively (muted to satisfy autoplay policy)
+                try { audioElement.play().catch(() => { if (DEBUG) console.log('[client] audio.play() blocked'); }); } catch (e) {}
+                statusDiv.textContent = 'Joined Channel';
+            }, 200);
             resolve();
         });
     });
 }
 
 function processQueue() {
-    if (!ready || !sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
+    // Basic guards: ensure we're ready, have a sourceBuffer, and mediaSource
+    if (!ready || !sourceBuffer || !mediaSource || queue.length === 0) return;
+    // Ensure the mediaSource is still open. If it's not open yet,
+    // keep queued data and retry shortly — do not drop it.
+    if (mediaSource.readyState !== 'open') {
+        // schedule a retry; this keeps the queued chunks until the source opens
+        setTimeout(processQueue, 100);
+        return;
+    }
+    // Ensure the sourceBuffer is still attached to the mediaSource
+    try {
+        const sbList = Array.from(mediaSource.sourceBuffers || []);
+        if (!sbList.includes(sourceBuffer)) {
+            console.warn('SourceBuffer was removed from MediaSource; cleaning up');
+            cleanupMedia();
+            queue = [];
+            return;
+        }
+    } catch (e) {
+        // defensively handle any weird browser states
+        console.warn('Error checking sourceBuffers:', e);
+    }
+    if (sourceBuffer.updating) return;
     const chunk = queue.shift();
     try {
+        if (DEBUG) console.log('[client] appending chunk, bytes=', chunk.byteLength);
         sourceBuffer.appendBuffer(chunk);
+        // after appending, ensure playback is attempted
+        setTimeout(() => { if (audioElement.paused) { audioElement.play().catch(() => { if (DEBUG) console.log('[client] play blocked after append'); }); } }, 50);
+        // Log playing state
+        audioElement.addEventListener('playing', () => { if (DEBUG) console.log('[client] audio playing'); }, { once: true });
     } catch (err) {
         console.warn('Append error:', err);
         queue = [];
@@ -130,6 +216,16 @@ function cleanupMedia() {
         mediaSource = null;
         sourceBuffer = null;
     }
+    // clear ready state and queued chunks so we don't try appending after teardown
+    ready = false;
+    queue = [];
+    // Revoke previously created object URL and clear source
+    try {
+        if (mediaSourceURL) {
+            URL.revokeObjectURL(mediaSourceURL);
+            mediaSourceURL = null;
+        }
+    } catch (err) { /* ignore */ }
     audioElement.removeAttribute('src');
     audioElement.load();
 }

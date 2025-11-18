@@ -6,6 +6,7 @@ const statusDiv = document.getElementById('status');
 let ws;
 let mediaRecorder;
 let stream;
+let testAudio;
 
 startBtn.addEventListener('click', async () => {
     const lang = languageInput.value.trim();
@@ -79,7 +80,54 @@ async function startRecording() {
         };
         mediaRecorder.start(100); // Send chunks every 100ms
     } catch (err) {
-        statusDiv.textContent = 'Error accessing microphone: ' + err.message;
+        console.warn('Microphone error:', err);
+        statusDiv.textContent = 'Microphone not available. Using test tone.';
+
+        // Stream the test tone through captureStream() and MediaRecorder so the
+        // server receives properly framed WebM/Opus blobs (like a real mic).
+        const response = await fetch('/static/TestTone.webm');
+        const audioData = await response.arrayBuffer();
+        try {
+            const audioEl = document.createElement('audio');
+            audioEl.src = '/static/TestTone.webm';
+            audioEl.loop = true;
+            audioEl.muted = true; // allow autoplay in many browsers
+            audioEl.playsInline = true;
+            // Attach to DOM quietly so autoplay policies are friendlier (optional)
+            audioEl.style.display = 'none';
+            document.body.appendChild(audioEl);
+            // Try to start playback; some browsers forbid autoplay unless muted
+            try { await audioEl.play(); } catch (playErr) { /* ignore */ }
+
+            // Give it a short time to become ready
+            await new Promise(res => {
+                if (audioEl.readyState >= 3) return res();
+                const t = setTimeout(res, 300);
+                audioEl.addEventListener('canplay', () => { clearTimeout(t); res(); }, { once: true });
+            });
+
+            // Capture the audio output as a MediaStream and record it
+            if (typeof audioEl.captureStream === 'function') {
+                stream = audioEl.captureStream();
+                const options = { mimeType: 'audio/webm;codecs=opus' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) options.mimeType = 'audio/webm';
+                mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                        ws.send(event.data);
+                    }
+                };
+                mediaRecorder.start(100); // produce chunks every 100ms like live mic
+                testAudio = audioEl; // keep reference so it isn't GC'd
+            } else {
+                // As a fallback if captureStream isn't available, send the whole
+                // file periodically (less ideal but still functional).
+                ws.send(audioData);
+                setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(audioData); }, 2000);
+            }
+        } catch (err) {
+            console.warn('Test tone fallback failed:', err);
+        }
     }
 }
 
