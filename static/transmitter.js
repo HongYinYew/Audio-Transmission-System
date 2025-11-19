@@ -15,7 +15,7 @@ startBtn.addEventListener('click', async () => {
         return;
     }
     statusDiv.textContent = 'Connecting...';
-    ws = new WebSocket('ws://' + window.location.host + '/ws/transmitter');
+    ws = new WebSocket('wss://' + window.location.host + '/ws/transmitter');
     ws.binaryType = 'arraybuffer';
     ws.onopen = async () => {
         statusDiv.textContent = 'Sending language...';
@@ -67,8 +67,17 @@ stopBtn.addEventListener('click', () => {
 
 async function startRecording() {
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const options = { mimeType: 'audio/webm;codecs=opus' };
+        stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                channelCount: 1,
+                sampleRate: 48000,
+                sampleSize: 16,
+                echoCancellation: true,
+                noiseSuppression: false,
+                autoGainControl: false
+            } 
+        });
+        const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128000 };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             options.mimeType = 'audio/webm';
         }
@@ -78,7 +87,7 @@ async function startRecording() {
                 ws.send(event.data);
             }
         };
-        mediaRecorder.start(100); // Send chunks every 100ms
+        mediaRecorder.start(1000); // Send chunks every 100ms
     } catch (err) {
         console.warn('Microphone error:', err);
         statusDiv.textContent = 'Microphone not available. Using test tone.';

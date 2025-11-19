@@ -15,7 +15,7 @@ const DEBUG = false;
 
 refreshBtn.addEventListener('click', async () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-        ws = new WebSocket('ws://' + window.location.host + '/ws/client');
+        ws = new WebSocket('wss://' + window.location.host + '/ws/client');
         ws.binaryType = 'arraybuffer';
         ws.onopen = () => {
             statusDiv.textContent = 'Connected to Server';
