@@ -15,7 +15,8 @@ startBtn.addEventListener('click', async () => {
         return;
     }
     statusDiv.textContent = 'Connecting...';
-    ws = new WebSocket('wss://' + window.location.host + '/ws/transmitter');
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(protocol + '://' + window.location.host + '/ws/transmitter');
     ws.binaryType = 'arraybuffer';
     ws.onopen = async () => {
         statusDiv.textContent = 'Sending language...';
