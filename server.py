@@ -1,26 +1,35 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Form
+import asyncio
+import json
+import logging
+from typing import Dict, Set
+from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
-import asyncio
-import json
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.contrib.media import MediaRelay
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("server")
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key="supersecret-key-change-this")  # change key
+app.add_middleware(SessionMiddleware, secret_key="supersecret-key-change-this")
 
-# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Global state
-channels = {}  # lang -> {"transmitter": ws, "clients": set(ws), "init": Optional[bytes]}
-VALID_USERNAME = "admin"
-VALID_PASSWORD = "churchaudio2025"  # change this to something unique
+relay = MediaRelay()
 
+channels: Dict[str, dict] = {}
+
+VALID_USERNAME = "Admin"
+VALID_PASSWORD = "churchaudio2025"
+
+
+# --- AUTH & PAGES ---
 @app.get("/")
 async def get_client():
     with open("static/client.html", "r", encoding="utf-8") as f:
-        content = f.read()
-    return HTMLResponse(content)
+        return HTMLResponse(f.read())
 
 @app.get("/login")
 async def login_page(request: Request):
@@ -36,139 +45,177 @@ async def login(request: Request, username: str = Form(...), password: str = For
     return HTMLResponse("<h3>Invalid credentials. <a href='/login'>Try again</a></h3>", status_code=401)
 
 def require_login(request: Request):
-    if not request.session.get("authenticated"):
-        return False
-    return True
-
-@app.get("/test")
-async def test():
-    return {"status": "ok", "channels": list(channels.keys())}
+    return request.session.get("authenticated")
 
 @app.get("/transmitter")
 async def get_transmitter(request: Request):
     if not require_login(request):
         return RedirectResponse(url="/login")
     with open("static/transmitter.html", "r", encoding="utf-8") as f:
-        content = f.read()
-    return HTMLResponse(content)
+        return HTMLResponse(f.read())
 
+@app.get("/api/channels")
+async def list_channels():
+    return list(channels.keys())
+
+async def broadcast_client_count(lang):
+    if lang in channels:
+        count = len(channels[lang]["listeners"])
+        ws = channels[lang]["transmitter_ws"]
+        try:
+            await ws.send_text(json.dumps({
+                "type": "client_count",
+                "count": count
+            }))
+        except:
+            pass
+
+# --- TRANSMITTER WEBSOCKET ---
 @app.websocket("/ws/transmitter")
 async def transmitter_websocket(websocket: WebSocket):
     await websocket.accept()
-    websocket.max_size = None
+    pc = None
     lang = None
+    
     try:
+        # 1. Wait for "config" message with language
         data = await websocket.receive_text()
-        lang = data.strip()
-        if lang in channels:
-            await websocket.send_text("Channel already exists")
+        msg = json.loads(data)
+        if msg.get("type") != "config":
             await websocket.close()
             return
-        channels[lang] = {"transmitter": websocket, "clients": set(), "init": None}
+            
+        lang = msg["value"]
+        
+        if lang in channels:
+            await websocket.send_text(json.dumps({"type": "error", "message": "Channel exists"}))
+            await websocket.close()
+            return
 
-        await websocket.send_text("Channel created")
+        pc = RTCPeerConnection()
+        
+        # 2. Setup Media Handling
+        @pc.on("track")
+        def on_track(track):
+            if track.kind == "audio":
+                logger.info(f"Channel created: {lang}")
+                channels[lang] = {
+                    "transmitter_pc": pc,
+                    "transmitter_ws": websocket,
+                    "track": track,
+                    "listeners": set()
+                }
+                # Notify transmitter success
+                asyncio.create_task(websocket.send_text(json.dumps({"type": "status", "message": "Transmitting"})))
 
-        async def send_client_count():
-            while True:
-                if lang not in channels:
-                    break
-                client_count = len(channels[lang]["clients"])
-                try:
-                    await websocket.send_text(json.dumps({
-                        "type": "client_count",
-                        "count": client_count
-                    }))
-                except:
-                    break
-                await asyncio.sleep(2)
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            if pc.connectionState in ["failed", "closed"]:
+                await websocket.close()
 
-        asyncio.create_task(send_client_count())
+        # 3. Handle SDP Offer from Transmitter
+        # We expect the next message to be the SDP offer
+        data = await websocket.receive_text()
+        offer_data = json.loads(data)
+        
+        offer = RTCSessionDescription(sdp=offer_data["sdp"], type=offer_data["type"])
+        await pc.setRemoteDescription(offer)
+        
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        
+        # Send Answer back
+        await websocket.send_text(json.dumps({
+            "type": "answer",
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type
+        }))
 
-        def _has_webm_tracks(buf: bytes) -> bool:
-            # WebM 'Tracks' element ID is 0x1654AE6B. Look for that byte sequence.
-            try:
-                return b"\x16\x54\xAE\x6B" in buf
-            except Exception:
-                return False
-
-        async def _finalize_init_after_delay(lang_key, max_delay=0.7, poll_interval=0.05):
-            # Collect initial chunks and finalize when we detect the WebM Tracks element
-            # or when max_delay is reached. Polls the init_buffer periodically.
-            waited = 0.0
-            while waited < max_delay:
-                await asyncio.sleep(poll_interval)
-                waited += poll_interval
-                ch = channels.get(lang_key)
-                if not ch:
-                    return
-                buf = ch.get("init_buffer")
-                if buf and _has_webm_tracks(buf):
-                    # Found Tracks element — finalize init
-                    ch.pop("init_buffer", None)
-                    ch["init"] = buf
-                    return
-            # Timeout reached — finalize whatever we have
-            ch = channels.get(lang_key)
-            if not ch:
-                return
-            buf = ch.pop("init_buffer", None)
-            if buf:
-                ch["init"] = buf
-
+        # Keep connection open for stats updates
         while True:
-            data = await websocket.receive_bytes()
-            # Collect an initial buffer over a short window to form a more complete init segment
-            if channels.get(lang) and channels[lang].get("init") is None:
-                # append to init_buffer
-                buf = channels[lang].get("init_buffer")
-                if buf is None:
-                    channels[lang]["init_buffer"] = data
-                    # schedule finalization after a short delay
-                    asyncio.create_task(_finalize_init_after_delay(lang, 0.3))
-                else:
-                    channels[lang]["init_buffer"] = buf + data
-            clients = channels[lang]["clients"]
-            for client in list(clients):
-                try:
-                    await client.send_bytes(data)
-                except:
-                    clients.remove(client)
+            await websocket.receive_text() # Keep alive / ignore extra messages
+
     except WebSocketDisconnect:
-        pass
+        logger.info(f"Transmitter disconnected: {lang}")
+    except Exception as e:
+        logger.error(f"Transmitter Error: {e}")
     finally:
+        # Cleanup
+        if pc:
+            await pc.close()
         if lang and lang in channels:
+            # Close all listeners for this channel
+            for listener_pc in channels[lang]["listeners"]:
+                asyncio.create_task(listener_pc.close())
             del channels[lang]
 
+# --- CLIENT WEBSOCKET ---
 @app.websocket("/ws/client")
 async def client_websocket(websocket: WebSocket):
     await websocket.accept()
-    websocket.max_size = None
+    pc = None
     current_lang = None
+    
     try:
+        # 1. Wait for "join"
+        data = await websocket.receive_text()
+        msg = json.loads(data)
+        if msg.get("type") != "join":
+            return
+            
+        current_lang = msg["value"]
+        
+        if current_lang not in channels:
+            await websocket.send_text(json.dumps({"type": "error", "message": "Channel not found"}))
+            await websocket.close()
+            return
+
+        pc = RTCPeerConnection()
+        
+        # Add to listeners list
+        channels[current_lang]["listeners"].add(pc)
+        await broadcast_client_count(current_lang)
+
+        # 2. Add Audio Track to PC
+        source_track = channels[current_lang]["track"]
+        pc.addTrack(relay.subscribe(source_track))
+
+        # 3. Handle SDP Offer (Client sends offer)
+        data = await websocket.receive_text()
+        offer_data = json.loads(data)
+        
+        offer = RTCSessionDescription(sdp=offer_data["sdp"], type=offer_data["type"])
+        await pc.setRemoteDescription(offer)
+        
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        
+        await websocket.send_text(json.dumps({
+            "type": "answer",
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type
+        }))
+
+        # Wait for disconnect
         while True:
-            data = await websocket.receive_text()
-            if data == "list_channels":
-                await websocket.send_text(json.dumps(list(channels.keys())))
-            elif data.startswith("join "):
-                lang = data[5:].strip()
-                if lang in channels:
-                    if current_lang:
-                        channels[current_lang]["clients"].discard(websocket)
-                    channels[lang]["clients"].add(websocket)
-                    current_lang = lang
-                    init_seg = channels[lang].get("init")
-                    if init_seg:
-                        await websocket.send_bytes(init_seg)
-                    await websocket.send_text("Joined")
-                else:
-                    await websocket.send_text("Channel not found")
-            elif data == "leave":
-                if current_lang:
-                    channels[current_lang]["clients"].discard(websocket)
-                    current_lang = None
-                    await websocket.send_text("Left")
+            await websocket.receive_text()
+
     except WebSocketDisconnect:
         pass
     finally:
-        if current_lang:
-            channels[current_lang]["clients"].discard(websocket)
+        if pc:
+            await pc.close()
+        if current_lang and current_lang in channels:
+            if pc in channels[current_lang]["listeners"]:
+                channels[current_lang]["listeners"].discard(pc)
+                await broadcast_client_count(current_lang)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    # Close all connections
+    for lang, ch in channels.items():
+        if ch["transmitter_pc"]:
+            await ch["transmitter_pc"].close()
+        for lpc in ch["listeners"]:
+            await lpc.close()
+    channels.clear()
