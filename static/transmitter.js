@@ -8,6 +8,11 @@ let ws = null;
 let pc = null;
 let localStream = null;
 
+// Ensure we clean up if the user closes the tab
+window.addEventListener('beforeunload', () => {
+    stopTransmission();
+});
+
 startBtn.addEventListener('click', async () => {
     const lang = languageInput.value.trim();
     if (!lang) {
@@ -20,7 +25,6 @@ startBtn.addEventListener('click', async () => {
     clientCountDiv.textContent = 'Connected listeners: 0';
 
     try {
-        // Fetch Audio Stream
         localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -29,18 +33,19 @@ startBtn.addEventListener('click', async () => {
             }
         });
 
-        // Connect to Websocket
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         ws = new WebSocket(protocol + '://' + window.location.host + '/ws/transmitter');
 
         ws.onopen = async () => {
-            // Create Channel
             ws.send(JSON.stringify({ type: "config", value: lang }));
 
             pc = new RTCPeerConnection();
             
             pc.onconnectionstatechange = () => {
-                if (pc.connectionState === 'failed') stopTransmission();
+                if (pc.connectionState === 'failed') {
+                    statusDiv.textContent = 'Network connection failed';
+                    stopTransmission();
+                }
             };
 
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
@@ -83,7 +88,10 @@ startBtn.addEventListener('click', async () => {
     }
 });
 
-stopBtn.addEventListener('click', stopTransmission);
+stopBtn.addEventListener('click', () => {
+    statusDiv.textContent = 'Broadcast stopped';
+    stopTransmission();
+});
 
 function stopTransmission() {
     if (pc) { pc.close(); pc = null; }

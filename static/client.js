@@ -37,12 +37,11 @@ refreshChannels();
 
 joinBtn.addEventListener('click', async () => {
     const lang = channelsSelect.value;
-    if (!lang) return;
+    if (!lang || lang.startsWith("--")) return;
 
     joinBtn.disabled = true;
     statusDiv.textContent = 'Connecting...';
 
-    // 1. Connect to WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(protocol + '://' + window.location.host + '/ws/client');
 
@@ -51,9 +50,19 @@ joinBtn.addEventListener('click', async () => {
 
         pc = new RTCPeerConnection();
 
+        // Detect if network connection drops or server closes PC
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                statusDiv.textContent = 'Connection lost (Network error)';
+                cleanup();
+            }
+        };
+
         pc.ontrack = (event) => {
             audioElement.srcObject = event.streams[0];
-            audioElement.play().catch(e => console.log("Autoplay blocked"));
+            audioElement.play().catch(e => {
+                statusDiv.textContent = "Audio ready. Click Play if silent.";
+            });
         };
 
         pc.addTransceiver('audio', { direction: 'recvonly' });
@@ -69,25 +78,34 @@ joinBtn.addEventListener('click', async () => {
 
     ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
+        
         if (msg.type === 'answer') {
             await pc.setRemoteDescription(msg);
             statusDiv.textContent = `Connected to ${lang}`;
             leaveBtn.disabled = false;
-        } else if (msg.type === 'error') {
+        } 
+        else if (msg.type === 'channel_closed') {
+            statusDiv.textContent = msg.message;
+            cleanup();
+            refreshChannels();
+        }
+        else if (msg.type === 'error') {
             statusDiv.textContent = msg.message;
             cleanup();
         }
     };
 
     ws.onclose = () => {
-        statusDiv.textContent = 'Disconnected (Server stopped)';
+        if (statusDiv.textContent.includes('Connected')) {
+             statusDiv.textContent = 'Disconnected (Server unreachable)';
+        }
         cleanup();
     };
 });
 
 leaveBtn.addEventListener('click', () => {
+    statusDiv.textContent = 'Left channel';
     cleanup();
-    statusDiv.textContent = 'Disconnected';
 });
 
 function cleanup() {

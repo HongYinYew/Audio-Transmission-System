@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Dict, Set
+from typing import Dict, Set, Tuple
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -19,11 +19,19 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 relay = MediaRelay()
 
+# channels structure:
+# {
+#   "English": {
+#       "transmitter_pc": RTCPeerConnection,
+#       "transmitter_ws": WebSocket,
+#       "track": MediaStreamTrack,
+#       "listeners": Set[Tuple[RTCPeerConnection, WebSocket]] 
+#   }
+# }
 channels: Dict[str, dict] = {}
 
 VALID_USERNAME = "Admin"
 VALID_PASSWORD = "churchaudio2025"
-
 
 # --- AUTH & PAGES ---
 @app.get("/")
@@ -78,7 +86,6 @@ async def transmitter_websocket(websocket: WebSocket):
     lang = None
     
     try:
-        # 1. Wait for "config" message with language
         data = await websocket.receive_text()
         msg = json.loads(data)
         if msg.get("type") != "config":
@@ -88,13 +95,12 @@ async def transmitter_websocket(websocket: WebSocket):
         lang = msg["value"]
         
         if lang in channels:
-            await websocket.send_text(json.dumps({"type": "error", "message": "Channel exists"}))
+            await websocket.send_text(json.dumps({"type": "error", "message": f"Channel '{lang}' already exists."}))
             await websocket.close()
             return
 
         pc = RTCPeerConnection()
         
-        # 2. Setup Media Handling
         @pc.on("track")
         def on_track(track):
             if track.kind == "audio":
@@ -105,16 +111,14 @@ async def transmitter_websocket(websocket: WebSocket):
                     "track": track,
                     "listeners": set()
                 }
-                # Notify transmitter success
                 asyncio.create_task(websocket.send_text(json.dumps({"type": "status", "message": "Transmitting"})))
 
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             if pc.connectionState in ["failed", "closed"]:
+                # If the UDP connection dies, consider the transmitter dead
                 await websocket.close()
 
-        # 3. Handle SDP Offer from Transmitter
-        # We expect the next message to be the SDP offer
         data = await websocket.receive_text()
         offer_data = json.loads(data)
         
@@ -124,29 +128,38 @@ async def transmitter_websocket(websocket: WebSocket):
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
         
-        # Send Answer back
         await websocket.send_text(json.dumps({
             "type": "answer",
             "sdp": pc.localDescription.sdp,
             "type": pc.localDescription.type
         }))
 
-        # Keep connection open for stats updates
         while True:
-            await websocket.receive_text() # Keep alive / ignore extra messages
+            await websocket.receive_text()
 
     except WebSocketDisconnect:
         logger.info(f"Transmitter disconnected: {lang}")
     except Exception as e:
         logger.error(f"Transmitter Error: {e}")
     finally:
-        # Cleanup
+        # CLEANUP: Notify clients, then close connections
         if pc:
             await pc.close()
+        
         if lang and lang in channels:
-            # Close all listeners for this channel
-            for listener_pc in channels[lang]["listeners"]:
-                asyncio.create_task(listener_pc.close())
+            listeners = channels[lang]["listeners"]
+            for l_pc, l_ws in listeners:
+                # 1. Notify Client
+                try:
+                    await l_ws.send_text(json.dumps({
+                        "type": "channel_closed", 
+                        "message": "Broadcast ended by host."
+                    }))
+                except:
+                    pass
+                # 2. Close Connection
+                asyncio.create_task(l_pc.close())
+            
             del channels[lang]
 
 # --- CLIENT WEBSOCKET ---
@@ -157,7 +170,6 @@ async def client_websocket(websocket: WebSocket):
     current_lang = None
     
     try:
-        # 1. Wait for "join"
         data = await websocket.receive_text()
         msg = json.loads(data)
         if msg.get("type") != "join":
@@ -172,15 +184,13 @@ async def client_websocket(websocket: WebSocket):
 
         pc = RTCPeerConnection()
         
-        # Add to listeners list
-        channels[current_lang]["listeners"].add(pc)
+        # Add to listeners set (Tuple of PC and WebSocket)
+        channels[current_lang]["listeners"].add((pc, websocket))
         await broadcast_client_count(current_lang)
 
-        # 2. Add Audio Track to PC
         source_track = channels[current_lang]["track"]
         pc.addTrack(relay.subscribe(source_track))
 
-        # 3. Handle SDP Offer (Client sends offer)
         data = await websocket.receive_text()
         offer_data = json.loads(data)
         
@@ -196,7 +206,6 @@ async def client_websocket(websocket: WebSocket):
             "type": pc.localDescription.type
         }))
 
-        # Wait for disconnect
         while True:
             await websocket.receive_text()
 
@@ -206,16 +215,6 @@ async def client_websocket(websocket: WebSocket):
         if pc:
             await pc.close()
         if current_lang and current_lang in channels:
-            if pc in channels[current_lang]["listeners"]:
-                channels[current_lang]["listeners"].discard(pc)
-                await broadcast_client_count(current_lang)
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    # Close all connections
-    for lang, ch in channels.items():
-        if ch["transmitter_pc"]:
-            await ch["transmitter_pc"].close()
-        for lpc in ch["listeners"]:
-            await lpc.close()
-    channels.clear()
+            # Safely remove from set using discard
+            channels[current_lang]["listeners"].discard((pc, websocket))
+            await broadcast_client_count(current_lang)
