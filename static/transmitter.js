@@ -53,7 +53,6 @@ startBtn.addEventListener('click', async () => {
         const audioConstraints = {
             audio: {
                 // 1. Audio Quality Standards
-                sampleRate: 48000,      // Standardized Sample Rate
                 channelCount: 2,          // Force Stereo (even if mic is mono)
                 sampleSize: 16,           // Prefer 16-bit integer
                 
