@@ -3,10 +3,30 @@ const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const statusDiv = document.getElementById('status');
 const clientCountDiv = document.getElementById('client-count');
+const processingCheckbox = document.getElementById('processing'); 
 
 let ws = null;
 let pc = null;
 let localStream = null;
+
+// --- NEW: Live Toggle Feature ---
+processingCheckbox.addEventListener('change', async () => {
+    if (!localStream) return;
+    const useProcessing = processingCheckbox.checked;
+    const track = localStream.getAudioTracks()[0];
+    statusDiv.textContent = 'Updating audio settings...';
+    try {
+        await track.applyConstraints({
+            echoCancellation: useProcessing,
+            noiseSuppression: useProcessing,
+            autoGainControl: useProcessing,
+        });
+        const mode = useProcessing ? "(Processed)" : "(Raw Audio)";
+        statusDiv.textContent = `Transmitting ${mode}`;
+    } catch (err) {
+        console.error('Failed to apply constraints:', err);
+    }
+});
 
 // Ensure we clean up if the user closes the tab
 window.addEventListener('beforeunload', () => {
@@ -24,14 +44,38 @@ startBtn.addEventListener('click', async () => {
     statusDiv.textContent = 'Initializing...';
     clientCountDiv.textContent = 'Connected listeners: 0';
 
+    const useProcessing = processingCheckbox.checked;
+
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({
+        // --- STANDARDIZED AUDIO CONSTRAINTS ---
+        // This forces the browser to resample 16kHz/44.1kHz hardware to 48kHz 
+        // BEFORE it even reaches your transmission logic.
+        const audioConstraints = {
             audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
+                // 1. Audio Quality Standards
+                sampleRate: 48000,        // Standard for Opus/WebRTC
+                channelCount: 2,          // Force Stereo (even if mic is mono)
+                sampleSize: 16,           // Prefer 16-bit integer
+                latency: 0,               // Request lowest driver latency
+                
+                // 2. Processing toggles
+                echoCancellation: useProcessing,
+                noiseSuppression: useProcessing,
+                autoGainControl: useProcessing
             }
-        });
+        };
+
+        localStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+
+        // --- VERIFICATION LOG ---
+        // This tells you what the browser ACTUALLY managed to get from the hardware
+        const track = localStream.getAudioTracks()[0];
+        const settings = track.getSettings();
+        console.log("--- Audio Source Standardized ---");
+        console.log(`Sample Rate: ${settings.sampleRate} Hz`);
+        console.log(`Channels: ${settings.channelCount}`);
+        console.log(`Latency: ${settings.latency} sec`);
+        console.log("---------------------------------");
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         ws = new WebSocket(protocol + '://' + window.location.host + '/ws/transmitter');
@@ -64,7 +108,8 @@ startBtn.addEventListener('click', async () => {
             
             if (msg.type === 'answer') {
                 await pc.setRemoteDescription(msg);
-                statusDiv.textContent = `Transmitting in ${lang}`;
+                const mode = useProcessing ? "(Processed)" : "(Raw Audio)";
+                statusDiv.textContent = `Transmitting ${mode}`;
                 stopBtn.disabled = false;
             } 
             else if (msg.type === 'client_count') {
