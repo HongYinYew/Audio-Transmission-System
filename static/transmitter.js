@@ -53,10 +53,8 @@ startBtn.addEventListener('click', async () => {
         const audioConstraints = {
             audio: {
                 // 1. Audio Quality Standards
-                sampleRate: 48000,        // Standard for Opus/WebRTC
                 channelCount: 2,          // Force Stereo (even if mic is mono)
                 sampleSize: 16,           // Prefer 16-bit integer
-                latency: 0,               // Request lowest driver latency
                 
                 // 2. Processing toggles
                 echoCancellation: useProcessing,
