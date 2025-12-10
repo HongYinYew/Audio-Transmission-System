@@ -11,46 +11,34 @@
       --card-bg: #1e1e1e;
       --text-color: #e5e5e5;
       --primary: #3399ff;
-      --primary-hover: #62b2ff;
+      --danger: #ff4444;
       --shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
-
     * { box-sizing: border-box; }
-
     body {
       margin: 0; padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background-color: var(--bg-color);
       color: var(--text-color);
       display: flex; align-items: center; justify-content: center;
-      height: 100vh;
-      overflow: hidden;
+      height: 100vh; overflow: hidden;
     }
-
     .player-card {
       background-color: var(--card-bg);
       border-radius: 24px;
-      width: 90%;
-      max-width: 400px;
+      width: 90%; max-width: 400px;
       padding: 2.5rem 2rem;
       text-align: center;
       box-shadow: var(--shadow);
     }
-
     .artwork-container {
-      width: 100px; /* Smaller on login is standard */
-      height: 100px;
-      margin: 0 auto 1.5rem;
-      border-radius: 20px;
-      overflow: hidden;
-      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-      background: #2a2a2a;
+      width: 100px; height: 100px; margin: 0 auto 1.5rem;
+      border-radius: 20px; overflow: hidden;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.3); background: #2a2a2a;
     }
-    
     .artwork-container img { width: 100%; height: 100%; object-fit: cover; }
-
     h2 { margin: 0 0 1.5rem; font-size: 1.5rem; color: white; }
-
+    
     input {
       display: block; width: 100%; margin: 1rem 0; padding: 14px;
       border: 1px solid #333; border-radius: 12px; font-size: 1rem;
@@ -58,11 +46,23 @@
       transition: border-color 0.2s;
     }
     input:focus { border-color: var(--primary); }
+    
+    /* Error State for Inputs */
+    input.error-border { border-color: var(--danger); }
 
     button {
       width: 100%; padding: 14px; font-size: 1rem; font-weight: 600;
       border: none; border-radius: 12px; background-color: var(--primary);
       color: white; cursor: pointer; margin-top: 10px;
+    }
+    
+    #error-msg {
+      color: var(--danger);
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      min-height: 1.2em;
+      opacity: 0;
+      transition: opacity 0.3s;
     }
 
     footer { margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.5; }
@@ -70,21 +70,69 @@
     @media (max-height: 700px) {
         .player-card { padding: 1.5rem; }
         .artwork-container { width: 80px; height: 80px; margin-bottom: 1rem; }
-        h2 { font-size: 1.2rem; }
     }
   </style>
 </head>
 <body>
-  <form class="player-card" method="POST" action="/login">
+  <form class="player-card" id="loginForm">
     <div class="artwork-container">
       <img src="/static/logo.png" alt="Logo">
     </div>
     
     <h2>Login</h2>
-    <input name="username" placeholder="Username" required autocomplete="username">
-    <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
-    <button type="submit">Sign In</button>
+    <input id="username" name="username" placeholder="Username" required autocomplete="username">
+    <input id="password" type="password" name="password" placeholder="Password" required autocomplete="current-password">
+    
+    <button type="submit" id="submitBtn">Sign In</button>
+    <div id="error-msg">Invalid Credentials</div>
+    
     <footer>Authorized Access Only</footer>
   </form>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errorMsg = document.getElementById('error-msg');
+    const inputs = form.querySelectorAll('input');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      // Reset UI
+      errorMsg.style.opacity = '0';
+      inputs.forEach(i => i.classList.remove('error-border'));
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Verifying...";
+
+      const formData = new FormData(form);
+
+      try {
+        const response = await fetch('/login', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          window.location.href = result.redirect;
+        } else {
+          showError(result.message);
+        }
+      } catch (err) {
+        showError("Connection error. Please try again.");
+      }
+    });
+
+    function showError(msg) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Sign In";
+      errorMsg.textContent = msg;
+      errorMsg.style.opacity = '1';
+      document.getElementById('password').value = ''; // Clear password
+      document.getElementById('password').classList.add('error-border');
+      document.getElementById('username').classList.add('error-border');
+    }
+  </script>
 </body>
 </html>

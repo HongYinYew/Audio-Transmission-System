@@ -1,5 +1,5 @@
 const channelsSelect = document.getElementById('channels');
-const refreshBtn = document.getElementById('refresh-btn'); // Matches new ID
+const refreshBtn = document.getElementById('refresh-btn');
 const playPauseBtn = document.getElementById('play-pause-btn');
 const stopBtn = document.getElementById('stop-btn');
 const statusBadge = document.getElementById('status');
@@ -14,7 +14,6 @@ let wakeLock = null;
 let currentLang = "";
 
 // --- 1. Channel Management ---
-
 async function refreshChannels() {
     try {
         const res = await fetch('/api/channels');
@@ -42,7 +41,6 @@ async function refreshChannels() {
             playPauseBtn.disabled = false;
         }
     } catch (err) {
-        console.error(err);
         statusBadge.textContent = 'Error loading channels';
     }
 }
@@ -50,26 +48,20 @@ async function refreshChannels() {
 refreshBtn.addEventListener('click', refreshChannels);
 refreshChannels();
 
-// When user selects a channel, we treat it as "Connect & Play"
 channelsSelect.addEventListener('change', () => {
     if (channelsSelect.value && !channelsSelect.value.startsWith('--')) {
         connectToChannel(channelsSelect.value);
     }
 });
 
-
-// --- 2. Connection Logic (WebRTC) ---
-
+// --- 2. Connection Logic ---
 async function connectToChannel(lang) {
     currentLang = lang;
-    
-    // Switch UI
     channelSetup.style.display = 'none';
     playerUi.style.display = 'block';
     currentChannelLabel.textContent = lang;
     updateStatus('Connecting...', false);
 
-    // Setup Wake Lock & Audio
     await requestWakeLock();
 
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -82,31 +74,30 @@ async function connectToChannel(lang) {
 
         pc.onconnectionstatechange = () => {
             if (pc.connectionState === 'failed') {
-                updateStatus('Connection Failed', false);
-                disconnect();
+                // No Alert: Just update status
+                updateStatus('Connection Blocked', false);
+                setTimeout(() => disconnect(), 2000);
             }
         };
 
         pc.ontrack = (event) => {
-            // Audio Stream Received
+            const receiver = event.receiver;
+            if (receiver.playoutDelayHint !== undefined) {
+                receiver.playoutDelayHint = 0;
+            }
             audioElement.srcObject = event.streams[0];
             
-            // Attempt Auto-Play
-            audioElement.play()
-                .then(() => {
-                    setupMediaSession(lang); // Setup Notification
-                    updatePlayButtonUI(true); // Show Pause Icon
-                    updateStatus('Live', true);
-                })
-                .catch(err => {
-                    console.warn("Autoplay blocked, waiting for user interaction", err);
-                    updateStatus('Tap Play to Start', false);
-                    updatePlayButtonUI(false);
-                });
+            audioElement.play().then(() => {
+                setupMediaSession(currentLang);
+                updatePlayButtonUI(true);
+                updateStatus('Live', true);
+            }).catch(e => {
+                updateStatus('Tap Play to Start', false);
+                updatePlayButtonUI(false);
+            });
         };
 
         pc.addTransceiver('audio', { direction: 'recvonly' });
-
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
@@ -120,85 +111,67 @@ async function connectToChannel(lang) {
         const msg = JSON.parse(event.data);
         if (msg.type === 'answer') {
             await pc.setRemoteDescription(msg);
-        } else if (msg.type === 'channel_closed' || msg.type === 'error') {
-            alert(msg.message);
-            disconnect();
+        } 
+        else if (msg.type === 'channel_closed') {
+            // NO ALERT: Update UI directly
+            updateStatus('Session Ended by Host', false);
+            disconnect(false); // false = don't clear status immediately
+        }
+        else if (msg.type === 'error') {
+            updateStatus(msg.message, false);
+            setTimeout(() => disconnect(), 2000);
         }
     };
 
     ws.onclose = () => {
-        if (playerUi.style.display === 'block') {
-            updateStatus('Disconnected', false);
+        if (playerUi.style.display === 'block' && statusBadge.textContent === 'Live') {
+             updateStatus('Disconnected', false);
         }
     };
 }
 
-function disconnect() {
+function disconnect(resetStatus = true) {
     if (pc) { pc.close(); pc = null; }
     if (ws) { ws.close(); ws = null; }
     
-    // Reset Audio
     audioElement.srcObject = null;
-    audioElement.load(); // Releases audio resources
+    audioElement.load();
     
-    // Reset UI
     playerUi.style.display = 'none';
     channelSetup.style.display = 'block';
     updatePlayButtonUI(false);
-    updateStatus('Disconnected', false);
-    refreshChannels(); // Refresh list to see if channel still exists
+    
+    if (resetStatus) {
+        updateStatus('Disconnected', false);
+    }
+    refreshChannels();
 }
 
-
-// --- 3. Player Control Logic ---
-
-// Toggle Play/Pause
 playPauseBtn.addEventListener('click', () => {
-    if (audioElement.paused) {
-        audioElement.play();
-    } else {
-        audioElement.pause();
-    }
+    if (audioElement.paused) audioElement.play();
+    else audioElement.pause();
 });
 
-// Stop / Leave
-stopBtn.addEventListener('click', disconnect);
+stopBtn.addEventListener('click', () => disconnect(true));
 
-// SYNC: Listen to the actual audio element events
-// This ensures that if Android Notification pauses the audio, OUR button updates.
-audioElement.addEventListener('play', () => {
-    updatePlayButtonUI(true);
-    updateStatus('Live', true);
-});
-
-audioElement.addEventListener('pause', () => {
-    updatePlayButtonUI(false);
-    updateStatus('Paused', false);
-});
-
-
-// --- 4. Helper Functions ---
+audioElement.addEventListener('play', () => { updatePlayButtonUI(true); updateStatus('Live', true); });
+audioElement.addEventListener('pause', () => { updatePlayButtonUI(false); updateStatus('Paused', false); });
 
 function updatePlayButtonUI(isPlaying) {
     if (isPlaying) {
-        playPauseBtn.textContent = "❚❚"; // Pause Icon
+        playPauseBtn.textContent = "❚❚";
         playPauseBtn.classList.add('playing');
     } else {
-        playPauseBtn.textContent = "▶"; // Play Icon
+        playPauseBtn.textContent = "▶";
         playPauseBtn.classList.remove('playing');
     }
 }
 
 function updateStatus(text, isLive) {
     statusBadge.textContent = text;
-    if (isLive) {
-        statusBadge.classList.add('live');
-    } else {
-        statusBadge.classList.remove('live');
-    }
+    if (isLive) statusBadge.classList.add('live');
+    else statusBadge.classList.remove('live');
 }
-
-// --- 5. Android Integration (Media Session & Wake Lock) ---
 
 function setupMediaSession(channelName) {
     if ('mediaSession' in navigator) {
@@ -206,12 +179,8 @@ function setupMediaSession(channelName) {
             title: channelName + " Interpretation",
             artist: "9MCLC Live",
             album: "Sunday Service",
-            artwork: [
-                { src: '/static/logo.png', sizes: '512x512', type: 'image/png' }
-            ]
+            artwork: [{ src: '/static/logo.png', sizes: '512x512', type: 'image/png' }]
         });
-
-        // Binds Lock Screen Buttons to Audio Element
         navigator.mediaSession.setActionHandler('play', () => audioElement.play());
         navigator.mediaSession.setActionHandler('pause', () => audioElement.pause());
         navigator.mediaSession.setActionHandler('stop', () => disconnect());
@@ -220,17 +189,9 @@ function setupMediaSession(channelName) {
 
 async function requestWakeLock() {
     try {
-        if ('wakeLock' in navigator) {
-            wakeLock = await navigator.wakeLock.request('screen');
-        }
-    } catch (err) {
-        console.log("Wake Lock not supported or rejected");
-    }
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    } catch (err) {}
 }
-
-// Re-acquire Wake Lock if tab becomes visible again (it releases on minimize)
 document.addEventListener('visibilitychange', async () => {
-    if (wakeLock !== null && document.visibilityState === 'visible') {
-        await requestWakeLock();
-    }
+    if (wakeLock !== null && document.visibilityState === 'visible') await requestWakeLock();
 });

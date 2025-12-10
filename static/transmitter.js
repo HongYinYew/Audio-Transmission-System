@@ -2,7 +2,6 @@ const languageInput = document.getElementById('language');
 const processingCheckbox = document.getElementById('processing');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
-
 const statusBadge = document.getElementById('status');
 const clientCountBadge = document.getElementById('client-count');
 const setupForm = document.getElementById('setup-form');
@@ -12,8 +11,6 @@ const subtitleText = document.getElementById('subtitle-text');
 let ws = null;
 let pc = null;
 let localStream = null;
-
-// --- UI HELPERS ---
 
 function setUIState(state) {
     if (state === 'ready') {
@@ -35,15 +32,24 @@ function setUIState(state) {
     }
 }
 
-// --- CORE LOGIC ---
+function showError(msg) {
+    statusBadge.textContent = msg;
+    statusBadge.className = "badge error";
+    // Reset to "Ready" after 3 seconds if we aren't live
+    if (setupForm.style.display === 'block') {
+        setTimeout(() => {
+            if (setupForm.style.display === 'block') {
+                statusBadge.textContent = "Ready";
+                statusBadge.className = "badge";
+            }
+        }, 3000);
+    }
+}
 
-// 1. Live Processing Toggle
 processingCheckbox.addEventListener('change', async () => {
-    if (!localStream) return; // Only affects if stream is running
-    
+    if (!localStream) return;
     const useProcessing = processingCheckbox.checked;
     const track = localStream.getAudioTracks()[0];
-    
     statusBadge.textContent = 'Updating Audio...';
     try {
         await track.applyConstraints({
@@ -54,30 +60,24 @@ processingCheckbox.addEventListener('change', async () => {
         statusBadge.textContent = useProcessing ? "Enhanced Audio" : "Raw Audio";
         setTimeout(() => statusBadge.textContent = "Live", 1500);
     } catch (err) {
-        console.error('Failed to toggle processing:', err);
+        console.error(err);
     }
 });
 
-// 2. Prevent accidental close
-window.addEventListener('beforeunload', () => {
-    stopTransmission();
-});
+window.addEventListener('beforeunload', () => stopTransmission());
 
-// 3. Start Transmission
 startBtn.addEventListener('click', async () => {
     const lang = languageInput.value.trim();
     if (!lang) {
-        alert("Please enter a language name.");
+        showError("Enter a language name");
         return;
     }
 
     startBtn.disabled = true;
-    startBtn.textContent = "Starting...";
-    
+    startBtn.innerHTML = "Starting...";
     const useProcessing = processingCheckbox.checked;
 
     try {
-        // Audio Constraints (Standardized)
         const audioConstraints = {
             audio: {
                 channelCount: 2, 
@@ -99,8 +99,7 @@ startBtn.addEventListener('click', async () => {
             
             pc.onconnectionstatechange = () => {
                 if (pc.connectionState === 'failed') {
-                    statusBadge.textContent = 'Network Error';
-                    statusBadge.className = 'badge error';
+                    showError("Network Error");
                     stopTransmission();
                 }
             };
@@ -123,42 +122,38 @@ startBtn.addEventListener('click', async () => {
                 await pc.setRemoteDescription(msg);
                 setUIState('transmitting');
                 startBtn.disabled = false;
-                startBtn.innerHTML = "<span>●</span> Start Broadcast"; // Reset text for next time
+                startBtn.innerHTML = "<span>●</span> Start Broadcast"; 
             } 
             else if (msg.type === 'client_count') {
                 clientCountBadge.textContent = `${msg.count} Listeners`;
             }
             else if (msg.type === 'error') {
-                alert(msg.message);
+                // NO ALERT: Show in badge
+                showError(msg.message);
                 stopTransmission();
             }
         };
 
-        ws.onclose = () => {
-            stopTransmission();
-        };
+        ws.onclose = () => stopTransmission();
 
     } catch (err) {
-        console.error(err);
-        alert("Microphone Error: " + err.message);
+        showError("Mic Error: " + err.message);
         stopTransmission();
     }
 });
 
-// 4. Stop Transmission
-stopBtn.addEventListener('click', () => {
-    stopTransmission();
-});
+stopBtn.addEventListener('click', () => stopTransmission());
 
 function stopTransmission() {
     if (pc) { pc.close(); pc = null; }
     if (ws) { ws.close(); ws = null; }
-    
     if (localStream) { 
         localStream.getTracks().forEach(t => t.stop()); 
         localStream = null; 
     }
     
+    startBtn.disabled = false;
+    startBtn.innerHTML = "<span>●</span> Start Broadcast";
     setUIState('ready');
     clientCountBadge.textContent = "0 Listeners";
 }

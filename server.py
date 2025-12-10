@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Set, Tuple
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse # Added JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
@@ -19,15 +19,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 relay = MediaRelay()
 
-# channels structure:
-# {
-#   "English": {
-#       "transmitter_pc": RTCPeerConnection,
-#       "transmitter_ws": WebSocket,
-#       "track": MediaStreamTrack,
-#       "listeners": Set[Tuple[RTCPeerConnection, WebSocket]] 
-#   }
-# }
 channels: Dict[str, dict] = {}
 
 VALID_USERNAME = "Admin"
@@ -49,8 +40,14 @@ async def login_page(request: Request):
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     if username == VALID_USERNAME and password == VALID_PASSWORD:
         request.session["authenticated"] = True
-        return RedirectResponse(url="/transmitter", status_code=302)
-    return HTMLResponse("<h3>Invalid credentials. <a href='/login'>Try again</a></h3>", status_code=401)
+        # Return JSON success signal instead of forced redirect
+        return JSONResponse({"success": True, "redirect": "/transmitter"})
+    
+    # Return JSON error signal
+    return JSONResponse(
+        {"success": False, "message": "Incorrect Username or Password"}, 
+        status_code=401
+    )
 
 def require_login(request: Request):
     return request.session.get("authenticated")
@@ -95,7 +92,8 @@ async def transmitter_websocket(websocket: WebSocket):
         lang = msg["value"]
         
         if lang in channels:
-            await websocket.send_text(json.dumps({"type": "error", "message": f"Channel '{lang}' already exists."}))
+            # Send error as JSON message, not alert
+            await websocket.send_text(json.dumps({"type": "error", "message": f"Channel '{lang}' is busy."}))
             await websocket.close()
             return
 
@@ -116,7 +114,6 @@ async def transmitter_websocket(websocket: WebSocket):
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             if pc.connectionState in ["failed", "closed"]:
-                # If the UDP connection dies, consider the transmitter dead
                 await websocket.close()
 
         data = await websocket.receive_text()
@@ -142,22 +139,19 @@ async def transmitter_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Transmitter Error: {e}")
     finally:
-        # CLEANUP: Notify clients, then close connections
         if pc:
             await pc.close()
         
         if lang and lang in channels:
             listeners = channels[lang]["listeners"]
             for l_pc, l_ws in listeners:
-                # 1. Notify Client
                 try:
                     await l_ws.send_text(json.dumps({
                         "type": "channel_closed", 
-                        "message": "Broadcast ended by host."
+                        "message": "Broadcast ended by host"
                     }))
                 except:
                     pass
-                # 2. Close Connection
                 asyncio.create_task(l_pc.close())
             
             del channels[lang]
@@ -178,13 +172,12 @@ async def client_websocket(websocket: WebSocket):
         current_lang = msg["value"]
         
         if current_lang not in channels:
-            await websocket.send_text(json.dumps({"type": "error", "message": "Channel not found"}))
+            await websocket.send_text(json.dumps({"type": "error", "message": "Channel unavailable"}))
             await websocket.close()
             return
 
         pc = RTCPeerConnection()
         
-        # Add to listeners set (Tuple of PC and WebSocket)
         channels[current_lang]["listeners"].add((pc, websocket))
         await broadcast_client_count(current_lang)
 
@@ -215,6 +208,5 @@ async def client_websocket(websocket: WebSocket):
         if pc:
             await pc.close()
         if current_lang and current_lang in channels:
-            # Safely remove from set using discard
             channels[current_lang]["listeners"].discard((pc, websocket))
             await broadcast_client_count(current_lang)
