@@ -39,6 +39,9 @@ joinBtn.addEventListener('click', async () => {
     const lang = channelsSelect.value;
     if (!lang || lang.startsWith("--")) return;
 
+    configureBackgroundAudio();
+    await requestWakeLock();
+
     joinBtn.disabled = true;
     statusDiv.textContent = 'Connecting...';
 
@@ -59,6 +62,11 @@ joinBtn.addEventListener('click', async () => {
         };
 
         pc.ontrack = (event) => {
+            const receiver = event.receiver;
+            if (receiver.playoutDelayHint !== undefined) {
+                receiver.playoutDelayHint = 0;
+            }
+            
             audioElement.srcObject = event.streams[0];
             audioElement.play().catch(e => {
                 statusDiv.textContent = "Audio ready. Click Play if silent.";
@@ -115,3 +123,40 @@ function cleanup() {
     joinBtn.disabled = false;
     leaveBtn.disabled = true;
 }
+
+
+function configureBackgroundAudio() {
+    // 1. Tell Android this is a "Music" session so it stays alive in background
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: "Live Interpretation",
+            artist: "9MCLC Tech Ministry",
+            album: "Live Stream",
+            artwork: [{ src: '/static/logo.png', sizes: '512x512', type: 'image/png' }]
+        });
+        
+        // Android requires these handlers to be present to enable background media
+        navigator.mediaSession.setActionHandler('play', () => document.getElementById('audio').play());
+        navigator.mediaSession.setActionHandler('pause', () => document.getElementById('audio').pause());
+        navigator.mediaSession.setActionHandler('stop', () => cleanup());
+    }
+}
+
+let wakeLock = null;
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Wake Lock is active');
+        }
+    } catch (err) {
+        console.log('Wake Lock skipped:', err.name, err.message);
+    }
+}
+
+// Re-apply Wake Lock if the user switches back to the tab
+document.addEventListener('visibilitychange', async () => {
+    if (wakeLock !== null && document.visibilityState === 'visible') {
+        await requestWakeLock();
+    }
+});
