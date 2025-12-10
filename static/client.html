@@ -2,60 +2,173 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Listen in Your Language</title>
+  <title>Live Interpretation Player</title>
   <link rel="icon" type="image/x-icon" href="/static/logo.png"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <style>
-    /* Preserved original styling */
     :root {
       --bg-color: #121212;
       --card-bg: #1e1e1e;
       --text-color: #e5e5e5;
       --primary: #3399ff;
-      --primary-hover: #62b2ff;
-      --border-color: #333;
-      --shadow: rgba(255, 255, 255, 0.08);
+      --danger: #ff4444;
+      --success: #00C851;
     }
-    * { box-sizing: border-box; }
+    
     body {
       margin: 0; padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background-color: var(--bg-color);
       color: var(--text-color);
-      display: flex; align-items: center; justify-content: center; height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 100vh;
+      overflow: hidden; /* Prevent scrolling */
     }
-    .card {
+
+    .player-card {
       background-color: var(--card-bg);
-      box-shadow: 0 8px 25px var(--shadow);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      width: 90%; max-width: 380px; padding: 2rem; text-align: center;
+      border-radius: 24px;
+      width: 90%;
+      max-width: 380px;
+      padding: 2rem;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      position: relative;
     }
-    h2 { margin-top: 0; margin-bottom: 1.5rem; font-size: 1.6rem; color: var(--primary); }
-    button, select {
-      display: block; width: 100%; margin-bottom: 0.75rem; padding: 0.75rem;
-      font-size: 1rem; border-radius: 8px; border: none; cursor: pointer;
+
+    /* Album Art / Logo area */
+    .artwork-container {
+      width: 180px;
+      height: 180px;
+      margin: 0 auto 1.5rem;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+      background: #2a2a2a;
     }
-    button { background-color: var(--primary); color: white; font-weight: 600; }
-    button:disabled { background-color: #555; cursor: not-allowed; }
+    
+    .artwork-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    h2 { margin: 0; font-size: 1.4rem; color: #fff; }
+    p.subtitle { margin: 0.5rem 0 1.5rem; color: #aaa; font-size: 0.9rem; }
+
+    /* Channel Selector */
+    .channel-select-container {
+      margin-bottom: 2rem;
+    }
+    
     select {
-      border: 1px solid var(--border-color); background-color: transparent; color: var(--text-color);
+      width: 100%;
+      padding: 10px;
+      border-radius: 12px;
+      background: #333;
+      color: white;
+      border: 1px solid #444;
+      font-size: 1rem;
+      outline: none;
     }
-    audio { margin-top: 1.25rem; width: 100%; outline: none; }
-    #status { margin-top: 1rem; font-size: 0.95rem; opacity: 0.9; }
-    footer { margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.7; }
+
+    /* Player Controls */
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 1rem;
+    }
+
+    .btn-circle {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    
+    .btn-circle:active { transform: scale(0.95); }
+
+    #play-pause-btn {
+      background-color: var(--primary);
+      color: white;
+      font-size: 24px;
+    }
+    
+    #play-pause-btn.playing {
+      background-color: #eee;
+      color: #111;
+    }
+
+    #stop-btn {
+      width: 48px;
+      height: 48px;
+      background-color: rgba(255,255,255,0.1);
+      color: var(--danger);
+      font-size: 18px;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      background: #333;
+      color: #888;
+      font-size: 0.8rem;
+      margin-top: 1rem;
+    }
+    
+    .status-badge.live {
+      background: rgba(0, 200, 81, 0.2);
+      color: var(--success);
+    }
+    
+    /* Hide the actual audio element */
+    audio { display: none; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>Listen in Your Language</h2>
-    <button id="refresh">Show Available Channels</button>
-    <select id="channels"></select>
-    <button id="join">Join Channel</button>
-    <button id="leave" disabled>Leave</button>
-    <div id="status">Ready</div>
-    <audio id="audio" controls autoplay playsinline></audio>
-    <footer>9MCLC Tech Ministry • Live Listening</footer>
+
+  <div class="player-card">
+    <div class="artwork-container">
+      <img src="/static/logo.png" alt="Church Logo">
+    </div>
+
+    <div id="channel-setup">
+      <h2>Select Language</h2>
+      <p class="subtitle">Choose a channel to tune in</p>
+      <div class="channel-select-container">
+        <select id="channels">
+            <option>Loading...</option>
+        </select>
+        <button id="refresh-btn" style="margin-top:10px; padding:8px; width:100%; background:transparent; color:var(--primary); border:1px solid var(--primary); border-radius:8px;">Refresh List</button>
+      </div>
+    </div>
+
+    <div id="player-ui" style="display:none;">
+      <h2 id="current-channel-name">English</h2>
+      <p class="subtitle">Live Interpretation</p>
+
+      <div class="controls">
+        <button id="stop-btn" class="btn-circle" title="Disconnect">
+          ■
+        </button>
+
+        <button id="play-pause-btn" class="btn-circle">
+          ▶
+        </button>
+      </div>
+    </div>
+
+    <div id="status" class="status-badge">Disconnected</div>
+    
+    <audio id="audio" playsinline></audio>
   </div>
 
   <script src="/static/client.js"></script>
