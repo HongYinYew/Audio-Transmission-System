@@ -1,62 +1,86 @@
 const languageInput = document.getElementById('language');
-const startBtn = document.getElementById('start');
-const stopBtn = document.getElementById('stop');
-const statusDiv = document.getElementById('status');
-const clientCountDiv = document.getElementById('client-count');
-const processingCheckbox = document.getElementById('processing'); 
+const processingCheckbox = document.getElementById('processing');
+const startBtn = document.getElementById('start-btn');
+const stopBtn = document.getElementById('stop-btn');
+
+const statusBadge = document.getElementById('status');
+const clientCountBadge = document.getElementById('client-count');
+const setupForm = document.getElementById('setup-form');
+const activeControls = document.getElementById('active-controls');
+const subtitleText = document.getElementById('subtitle-text');
 
 let ws = null;
 let pc = null;
 let localStream = null;
 
-// --- NEW: Live Toggle Feature ---
+// --- UI HELPERS ---
+
+function setUIState(state) {
+    if (state === 'ready') {
+        setupForm.style.display = 'block';
+        activeControls.style.display = 'none';
+        subtitleText.textContent = "Setup your channel";
+        statusBadge.textContent = "Ready";
+        statusBadge.className = "badge";
+        clientCountBadge.style.display = 'none';
+        languageInput.disabled = false;
+    } 
+    else if (state === 'transmitting') {
+        setupForm.style.display = 'none';
+        activeControls.style.display = 'block';
+        subtitleText.textContent = "Broadcasting: " + languageInput.value;
+        statusBadge.textContent = "Live";
+        statusBadge.className = "badge live";
+        clientCountBadge.style.display = 'block';
+    }
+}
+
+// --- CORE LOGIC ---
+
+// 1. Live Processing Toggle
 processingCheckbox.addEventListener('change', async () => {
-    if (!localStream) return;
+    if (!localStream) return; // Only affects if stream is running
+    
     const useProcessing = processingCheckbox.checked;
     const track = localStream.getAudioTracks()[0];
-    statusDiv.textContent = 'Updating audio settings...';
+    
+    statusBadge.textContent = 'Updating Audio...';
     try {
         await track.applyConstraints({
             echoCancellation: useProcessing,
             noiseSuppression: useProcessing,
             autoGainControl: useProcessing,
         });
-        const mode = useProcessing ? "(Processed)" : "(Raw Audio)";
-        statusDiv.textContent = `Transmitting ${mode}`;
+        statusBadge.textContent = useProcessing ? "Enhanced Audio" : "Raw Audio";
+        setTimeout(() => statusBadge.textContent = "Live", 1500);
     } catch (err) {
-        console.error('Failed to apply constraints:', err);
+        console.error('Failed to toggle processing:', err);
     }
 });
 
-// Ensure we clean up if the user closes the tab
+// 2. Prevent accidental close
 window.addEventListener('beforeunload', () => {
     stopTransmission();
 });
 
+// 3. Start Transmission
 startBtn.addEventListener('click', async () => {
     const lang = languageInput.value.trim();
     if (!lang) {
-        statusDiv.textContent = 'Please enter a language';
+        alert("Please enter a language name.");
         return;
     }
 
     startBtn.disabled = true;
-    statusDiv.textContent = 'Initializing...';
-    clientCountDiv.textContent = 'Connected listeners: 0';
-
+    startBtn.textContent = "Starting...";
+    
     const useProcessing = processingCheckbox.checked;
 
     try {
-        // --- STANDARDIZED AUDIO CONSTRAINTS ---
-        // This forces the browser to resample 16kHz/44.1kHz hardware to 48kHz 
-        // BEFORE it even reaches your transmission logic.
+        // Audio Constraints (Standardized)
         const audioConstraints = {
             audio: {
-                // 1. Audio Quality Standards
-                channelCount: 2,          // Force Stereo (even if mic is mono)
-                sampleSize: 16,           // Prefer 16-bit integer
-                
-                // 2. Processing toggles
+                channelCount: 2, 
                 echoCancellation: useProcessing,
                 noiseSuppression: useProcessing,
                 autoGainControl: useProcessing
@@ -64,16 +88,6 @@ startBtn.addEventListener('click', async () => {
         };
 
         localStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
-
-        // --- VERIFICATION LOG ---
-        // This tells you what the browser ACTUALLY managed to get from the hardware
-        const track = localStream.getAudioTracks()[0];
-        const settings = track.getSettings();
-        console.log("--- Audio Source Standardized ---");
-        console.log(`Sample Rate: ${settings.sampleRate} Hz`);
-        console.log(`Channels: ${settings.channelCount}`);
-        console.log(`Latency: ${settings.latency} sec`);
-        console.log("---------------------------------");
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         ws = new WebSocket(protocol + '://' + window.location.host + '/ws/transmitter');
@@ -85,7 +99,8 @@ startBtn.addEventListener('click', async () => {
             
             pc.onconnectionstatechange = () => {
                 if (pc.connectionState === 'failed') {
-                    statusDiv.textContent = 'Network connection failed';
+                    statusBadge.textContent = 'Network Error';
+                    statusBadge.className = 'badge error';
                     stopTransmission();
                 }
             };
@@ -106,44 +121,44 @@ startBtn.addEventListener('click', async () => {
             
             if (msg.type === 'answer') {
                 await pc.setRemoteDescription(msg);
-                const mode = useProcessing ? "(Processed)" : "(Raw Audio)";
-                statusDiv.textContent = `Transmitting ${mode}`;
-                stopBtn.disabled = false;
+                setUIState('transmitting');
+                startBtn.disabled = false;
+                startBtn.innerHTML = "<span>●</span> Start Broadcast"; // Reset text for next time
             } 
             else if (msg.type === 'client_count') {
-                clientCountDiv.textContent = `Connected listeners: ${msg.count}`;
+                clientCountBadge.textContent = `${msg.count} Listeners`;
             }
             else if (msg.type === 'error') {
-                statusDiv.textContent = msg.message;
+                alert(msg.message);
                 stopTransmission();
             }
         };
 
         ws.onclose = () => {
-            statusDiv.textContent = 'Disconnected from server';
             stopTransmission();
         };
 
     } catch (err) {
         console.error(err);
-        statusDiv.textContent = 'Error: ' + err.message;
+        alert("Microphone Error: " + err.message);
         stopTransmission();
     }
 });
 
+// 4. Stop Transmission
 stopBtn.addEventListener('click', () => {
-    statusDiv.textContent = 'Broadcast stopped';
     stopTransmission();
 });
 
 function stopTransmission() {
     if (pc) { pc.close(); pc = null; }
     if (ws) { ws.close(); ws = null; }
+    
     if (localStream) { 
         localStream.getTracks().forEach(t => t.stop()); 
         localStream = null; 
     }
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    clientCountDiv.textContent = '';
+    
+    setUIState('ready');
+    clientCountBadge.textContent = "0 Listeners";
 }

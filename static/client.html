@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live Interpretation Player</title>
+  <title>Live Interpretation</title>
   <link rel="icon" type="image/x-icon" href="/static/logo.png"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <style>
@@ -11,10 +11,14 @@
       --card-bg: #1e1e1e;
       --text-color: #e5e5e5;
       --primary: #3399ff;
+      --primary-hover: #62b2ff;
       --danger: #ff4444;
       --success: #00C851;
+      --shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
     
+    * { box-sizing: border-box; }
+
     body {
       margin: 0; padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -22,114 +26,93 @@
       color: var(--text-color);
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       height: 100vh;
-      overflow: hidden; /* Prevent scrolling */
+      overflow: hidden;
     }
 
     .player-card {
       background-color: var(--card-bg);
       border-radius: 24px;
       width: 90%;
-      max-width: 380px;
-      padding: 2rem;
+      max-width: 400px; /* STANDARD WIDTH */
+      padding: 2.5rem 2rem;
       text-align: center;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-      position: relative;
+      box-shadow: var(--shadow);
+      display: flex; flex-direction: column; align-items: center;
     }
 
-    /* Album Art / Logo area */
+    /* --- UNIFIED ARTWORK STYLE --- */
     .artwork-container {
-      width: 180px;
-      height: 180px;
+      width: 140px;
+      height: 140px;
       margin: 0 auto 1.5rem;
-      border-radius: 20px;
+      border-radius: 24px;
       overflow: hidden;
       box-shadow: 0 8px 20px rgba(0,0,0,0.3);
       background: #2a2a2a;
+      flex-shrink: 0;
+      transition: all 0.3s ease;
     }
     
     .artwork-container img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+      width: 100%; height: 100%; object-fit: cover;
     }
 
-    h2 { margin: 0; font-size: 1.4rem; color: #fff; }
-    p.subtitle { margin: 0.5rem 0 1.5rem; color: #aaa; font-size: 0.9rem; }
+    h2 { margin: 0; font-size: 1.5rem; color: #fff; font-weight: 700; }
+    p.subtitle { margin: 0.5rem 0 1.5rem; color: #888; font-size: 0.95rem; }
 
     /* Channel Selector */
-    .channel-select-container {
-      margin-bottom: 2rem;
-    }
+    .channel-select-container { width: 100%; margin-bottom: 1rem; }
     
     select {
-      width: 100%;
-      padding: 10px;
-      border-radius: 12px;
-      background: #333;
-      color: white;
-      border: 1px solid #444;
-      font-size: 1rem;
-      outline: none;
+      width: 100%; padding: 14px; border-radius: 12px;
+      background: #2a2a2a; color: white; border: 1px solid #333;
+      font-size: 1rem; outline: none; appearance: none;
+      text-align: center; cursor: pointer;
     }
 
     /* Player Controls */
     .controls {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-      margin-bottom: 1rem;
+      display: flex; align-items: center; justify-content: center;
+      gap: 25px; margin: 1rem 0;
     }
 
     .btn-circle {
-      width: 64px;
-      height: 64px;
-      border-radius: 50%;
-      border: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: transform 0.1s;
+      width: 72px; height: 72px; border-radius: 50%; border: none;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: transform 0.1s; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
-    
     .btn-circle:active { transform: scale(0.95); }
 
-    #play-pause-btn {
-      background-color: var(--primary);
-      color: white;
-      font-size: 24px;
-    }
-    
-    #play-pause-btn.playing {
-      background-color: #eee;
-      color: #111;
-    }
+    #play-pause-btn { background-color: var(--primary); color: white; font-size: 28px; }
+    #play-pause-btn.playing { background-color: #e5e5e5; color: #111; }
 
     #stop-btn {
-      width: 48px;
-      height: 48px;
-      background-color: rgba(255,255,255,0.1);
-      color: var(--danger);
-      font-size: 18px;
+      width: 50px; height: 50px;
+      background-color: rgba(255,255,255,0.08); color: var(--danger); font-size: 20px;
+    }
+
+    .btn-text {
+      width: 100%; padding: 12px; border-radius: 12px;
+      background: transparent; color: var(--primary); border: 1px solid rgba(51, 153, 255, 0.3);
+      font-weight: 600; cursor: pointer; margin-top: 10px;
     }
 
     .status-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 12px;
-      background: #333;
-      color: #888;
-      font-size: 0.8rem;
-      margin-top: 1rem;
+      display: inline-block; padding: 6px 14px; border-radius: 20px;
+      background: #2a2a2a; color: #666; font-size: 0.85rem; margin-top: 1.5rem;
+      font-weight: 500;
     }
+    .status-badge.live { background: rgba(0, 200, 81, 0.15); color: var(--success); }
     
-    .status-badge.live {
-      background: rgba(0, 200, 81, 0.2);
-      color: var(--success);
+    /* --- MOBILE RESPONSIVE (Small Screens) --- */
+    @media (max-height: 700px) {
+      .player-card { padding: 1.5rem; }
+      .artwork-container { width: 100px; height: 100px; margin-bottom: 1rem; border-radius: 18px; }
+      h2 { font-size: 1.3rem; }
+      .btn-circle { width: 60px; height: 60px; font-size: 24px; }
+      #stop-btn { width: 44px; height: 44px; font-size: 18px; }
     }
-    
-    /* Hide the actual audio element */
+
     audio { display: none; }
   </style>
 </head>
@@ -140,29 +123,25 @@
       <img src="/static/logo.png" alt="Church Logo">
     </div>
 
-    <div id="channel-setup">
+    <div id="channel-setup" style="width: 100%;">
       <h2>Select Language</h2>
       <p class="subtitle">Choose a channel to tune in</p>
+      
       <div class="channel-select-container">
         <select id="channels">
             <option>Loading...</option>
         </select>
-        <button id="refresh-btn" style="margin-top:10px; padding:8px; width:100%; background:transparent; color:var(--primary); border:1px solid var(--primary); border-radius:8px;">Refresh List</button>
       </div>
+      <button id="refresh-btn" class="btn-text">↻ Refresh List</button>
     </div>
 
-    <div id="player-ui" style="display:none;">
+    <div id="player-ui" style="display:none; width: 100%;">
       <h2 id="current-channel-name">English</h2>
       <p class="subtitle">Live Interpretation</p>
 
       <div class="controls">
-        <button id="stop-btn" class="btn-circle" title="Disconnect">
-          ■
-        </button>
-
-        <button id="play-pause-btn" class="btn-circle">
-          ▶
-        </button>
+        <button id="stop-btn" class="btn-circle" title="Leave Channel">■</button>
+        <button id="play-pause-btn" class="btn-circle">▶</button>
       </div>
     </div>
 
